@@ -62,7 +62,8 @@ pub enum TokenType {
 #[derive(Debug)]
 pub enum ErrorType {
     InvalidToken,
-    UnterminatedString
+    UnterminatedString,
+    UnterminatedMultilineComment
 }
 
 struct Token {
@@ -171,6 +172,22 @@ impl<'a> Scanner<'a> {
             c
         })
     }
+    // used for multiline tokens (strings, multiline comments)
+    fn gobble_until_inc_newline(&mut self, to_match: &str) {
+        let mut lines_encountered = 0;
+        let mut window = String::new();
+        self.gobble_until(|x| {
+            if *x == '\n' {
+                lines_encountered += 1;
+            }
+            window.push(*x);
+            if window.len() > to_match.len() {
+                window.remove(0);
+            }
+            &window != to_match
+        });
+        self.line_num += lines_encountered;
+    }
     fn get_next(&mut self) -> RLoxResult<Option<Token>> {
         let next = self.next();
         match next {
@@ -195,6 +212,13 @@ impl<'a> Scanner<'a> {
                         // gobble until new line
                         self.gobble_until(|x| *x != '\n');
                         Ok(Some(self.next_token(TokenType::Comment)))
+                    } else if self.match_str("*") {
+                        self.gobble_until_inc_newline("*/");
+                        // handle case where multiline comment never terminated
+                        if !self.current.ends_with("*/") {
+                            return Err(RLoxError::LexicalError(self.line_num, self.swap_current(), ErrorType::UnterminatedMultilineComment))
+                        }
+                        Ok(Some(self.next_token(TokenType::Comment)))
                     } else {
                         Ok(Some(self.next_token(TokenType::Slash)))
                     }
@@ -209,14 +233,7 @@ impl<'a> Scanner<'a> {
                 '"' => {
                     // strings can span lines!
                     // string lexeme will contain the quotes
-                    let mut lines_encountered = 0;
-                    self.gobble_until(|x| {
-                        if *x == '\n' {
-                            lines_encountered += 1;
-                        }
-                        *x != '"'
-                    });
-                    self.line_num += lines_encountered;
+                    self.gobble_until_inc_newline("\"");
                     // handle case where string never terminated
                     if !self.current.ends_with("\"") {
                         return Err(RLoxError::LexicalError(self.line_num, self.swap_current(), ErrorType::UnterminatedString))
